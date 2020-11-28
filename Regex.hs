@@ -9,4 +9,4 @@ data Regex a = Empty
              | Literal a
              | Regex a :|: Regex a
              | Regex a :*: Regex a
-             | Closure a
+             | Closure (Regex a)
