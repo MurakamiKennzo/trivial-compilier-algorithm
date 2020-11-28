@@ -1,6 +1,6 @@
 --  {-# LANGUAGE OverloadedStrings #-}
 
--- implementation Thompson Algorithm that transform Regex to NFA
+-- implements Thompson Algorithm that transform Regex to NFA
 
  module Thompson
   (
