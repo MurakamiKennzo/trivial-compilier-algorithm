@@ -1,4 +1,4 @@
---  {-# LANGUAGE OverloadedStrings #-}
+ {-# LANGUAGE OverloadedStrings #-}
 
 -- implements Thompson Algorithm that transform Regex to NFA
 
@@ -7,106 +7,94 @@
     thompson
   ) where
 
--- import Data.Aeson
--- import Data.Text ( Text )
--- import Data.Aeson.Text
+import Regex
+import Control.Arrow ( second )
+import Data.Aeson
+import Data.Aeson.Text
 
 thompson :: Regex a -> NFA a Int
-thompson = fst . thompson' 0
+thompson = snd . thompson' 0
 
-thompson' :: (Enum s) => s -> Regex a -> (NFA a s, s)
-thompson' s Empty = (return trans, s')
-  where trans = NFATrans (InitState s) Nothing (EndState $ succ s)
-        s' = succ . succ $ s
+thompson' :: Int -> Regex a -> (Int, NFA a Int)
+thompson' n Empty = (n + 2, StartNode n [ (Nothing, EndNode $ n + 1) ])
+thompson' n (Literal a) = (n + 2, StartNode n [ (Just a, EndNode $ n + 1) ])
+thompson' n (regex :|: regex') = (n'' + 2, result)
+  where (n', nfa') = thompson' n regex
+        (n'', nfa'') = thompson' n' regex'
+        newStartState = n''
+        newEndState = n'' + 1
+        result = addNewEndState newEndState . addNewStartState newStartState $ (nfa', nfa'')
+thompson' n (regex :*: regex') = (n'', result)
+  where (n', nfa') = thompson' n regex
+        (n'', nfa'') = thompson' n' regex'
+        result = connect nfa' nfa''
+thompson' n (Closure regex) = (n' + 2, result)
+  where (n', nfa') = thompson' n regex
+        newStartState = n'
+        newEndState = n' + 1
+        result = insertClosure (newStartState, newEndState) nfa'
 
-thompson' s (Literal a) = (return trans, s')
-  where trans = NFATrans (InitState s) (return a) (EndState $ succ s)
-        s' = succ . succ $ s
+addNewStartState :: s -> (NFA a s, NFA a s) -> NFA a s
+addNewStartState s (StartNode s' transformes', StartNode s'' transformes'') = 
+  StartNode s [ (Nothing, MidNode s' transformes')
+              , (Nothing, MidNode s'' transformes'') ]
 
-thompson' s (r :|: r') = (transes' <> transes'', newS)
-  where (nfa', s') = thompson' s r
-        (nfa'', s'') = thompson' s' r'
-        newInitState = InitState s''
-        newEndState = EndState $ succ s''
-        newS = succ . succ $ s''
-        transes' = choice nfa' (newInitState, newEndState)
-        transes'' = choice nfa'' (newInitState, newEndState)
+addNewEndState :: s -> NFA a s -> NFA a s
+addNewEndState s (EndNode s') = MidNode s' [ (Nothing, EndNode s) ]
+addNewEndState s (StartNode s' transformes) = StartNode s' $ map (second $ addNewEndState s) transformes
+addNewEndState s (MidNode s' transformes) = MidNode s' $ map (second $ addNewEndState s) transformes
 
-thompson' s (r :*: r') = (a <> [b'] <> bs <> [e] <> c <> [d'] <> ds, s'')
-  where (nfa', s') = thompson' s r
-        (nfa'', s'') = thompson' s' r'
-        (a, b:bs) = break isEndState nfa'
-        (c, d:ds) = break isInitState nfa''
-        b' = endToMidState b
-        d' = initToMidState d
-        e = NFATrans (endState b') Nothing (startState d')
+connect :: NFA a s -> NFA a s -> NFA a s
+connect (EndNode s) (StartNode s' transformes) = MidNode s [ (Nothing, MidNode s' transformes) ]
+connect (StartNode s transformes) nfa = StartNode s $ map (second $ flip connect nfa) transformes
+connect (MidNode s transformes) nfa = MidNode s $ map (second $ flip connect nfa) transformes
 
-thompson' s (Closure r) = ([newInitToNewEndTrans, initTrans] <> a <> [b'] <> (if isSameTrans then [] else [d']) <> [endToInitTrans] <> bs <> [endTrans], newS)
-  where (nfa', s') = thompson' s r
-        newInitState = InitState s'
-        newEndState = EndState $ succ s'
-        newS = succ . succ $ s'
-        (a, b:bs) = break isInitState nfa'
-        (c, d:ds) = break isEndState nfa'
-        isSameTrans = isEndState b
-        b' = if isSameTrans then (endToMidState . initToMidState $ b) else initToMidState b
-        d' = if isSameTrans then (initToMidState . endToMidState $ d) else endToMidState d
-        initTrans = NFATrans newInitState Nothing (startState b')
-        endTrans = NFATrans (endState d') Nothing newEndState
-        newInitToNewEndTrans = NFATrans newInitState Nothing newEndState
-        endToInitTrans = NFATrans (endState d') Nothing (startState b')
+insertClosure :: (s, s) -> NFA a s -> NFA a s
+insertClosure (newStartState, newEndState) (StartNode s transformes)
+  = StartNode newStartState [ (Nothing, MidNode s $ map (second $ insertClosure' (newStartState, newEndState) s) transformes)
+                            , (Nothing, EndNode newEndState) ]
+insertClosure _ nfa = nfa
 
-choice :: NFA a s -> (State s, State s) -> NFA a s
-choice nfa (s, e) = let (a, b:bs) = break isInitState nfa
-                        (c, d:ds) = break isEndState nfa
-                        isSameTrans = isEndState b
-                        b' = if isSameTrans then (endToMidState . initToMidState $ b) else initToMidState b
-                        d' = if isSameTrans then (initToMidState . endToMidState $ d) else endToMidState d
-                        initTrans = NFATrans s Nothing (startState b')
-                        endTrans = NFATrans (endState d') Nothing e
-                    in  a <> [initTrans] <> [b'] <> (if isSameTrans then [] else [d']) <> [endTrans] <> bs
+insertClosure' :: (s, s) -> s -> NFA a s -> NFA a s
+insertClosure' (newStartState, newEndState) startState (EndNode s)
+  = MidNode s [ (Nothing, EndNode newEndState)
+              , (Nothing, MidNode startState []) ]
+insertClosure' a b (StartNode c transformes) = StartNode c $ map (second $ insertClosure' a b) transformes
+insertClosure' a b (MidNode c transformes) = MidNode c $ map (second $ insertClosure' a b) transformes
 
-isInitState :: NFATrans a s -> Bool
-isInitState (NFATrans (InitState _) _ _) = True
-isInitState _ = False
+data NFA a s = StartNode s [(Maybe a, NFA a s)]
+             | MidNode s [(Maybe a, NFA a s)]
+             | EndNode s deriving (Show, Eq)
 
-isEndState :: NFATrans a s -> Bool
-isEndState (NFATrans _ _ (EndState _)) = True
-isEndState _ = False
+-- below for echarts test
+toNFATrans :: NFA a s -> NFATrans a s
+toNFATrans (StartNode s transformes) = map (toNFATransItem (StartState s)) transformes <> foldMap (toNFATrans . snd) transformes
+toNFATrans (MidNode s transformes) = map (toNFATransItem (MidState s)) transformes <> foldMap (toNFATrans . snd) transformes
+toNFATrans (EndNode s) = []
 
-initToMidState :: NFATrans a s -> NFATrans a s
-initToMidState (NFATrans (InitState s) a s') = NFATrans (MidState s) a s'
-initToMidState a = a
+toNFATransItem :: State s -> (Maybe a, NFA a s) -> NFATransItem a s
+toNFATransItem state (a , StartNode s _) = NFATransItem state a (StartState s)
+toNFATransItem state (a , MidNode s _) = NFATransItem state a (MidState s)
+toNFATransItem state (a , EndNode s) = NFATransItem state a (EndState s)
 
-endToMidState :: NFATrans a s -> NFATrans a s
-endToMidState (NFATrans s' a (EndState s)) = NFATrans s' a (MidState s)
-endToMidState a = a
+type NFATrans a s = [ NFATransItem a s ]
 
-data Regex a = Empty
-             | Literal a
-             | Regex a :|: Regex a
-             | Regex a :*: Regex a
-             | Closure (Regex a)
-
-type NFA a s = [NFATrans a s]
-
-data NFATrans a s = NFATrans { startState :: State s
-                             , transItem :: Maybe a
-                             , endState :: State s } deriving (Show, Eq)
+data NFATransItem a s = NFATransItem { startState :: State s
+                                     , transformItem :: Maybe a
+                                     , endState :: State s } deriving (Show)
 
 data State s = EndState s
-             | InitState s
-             | MidState s deriving (Show, Eq)
+             | StartState s
+             | MidState s deriving (Show)
 
--- toJSON test with Echarts
--- instance (ToJSON s) => ToJSON (State s) where
---   toJSON (EndState s) = 
---         object ["type" .= (2 :: Int), "value" .= s]
---   toJSON (InitState s) = 
---         object ["type" .= (0 :: Int), "value" .= s]
---   toJSON (MidState s) = 
---         object ["type" .= (1 :: Int), "value" .= s]
+instance (ToJSON s) => ToJSON (State s) where
+  toJSON (EndState s) = 
+        object ["type" .= (2 :: Int), "value" .= s]
+  toJSON (StartState s) = 
+        object ["type" .= (0 :: Int), "value" .= s]
+  toJSON (MidState s) = 
+        object ["type" .= (1 :: Int), "value" .= s]
 
--- instance (ToJSON a, ToJSON s) => ToJSON (NFATrans a s) where
---   toJSON (NFATrans s a s') =
---         object ["startState" .= s, "transItem" .= a, "endState" .= s']
+instance (ToJSON a, ToJSON s) => ToJSON (NFATransItem a s) where
+  toJSON (NFATransItem s a s') =
+        object ["startState" .= s, "transformItem" .= a, "endState" .= s']
