@@ -5,6 +5,11 @@
  module Thompson
   (
     thompson
+  , NFATransItem(..)
+  , State(..)
+  , NFATrans
+  , toNFATrans
+  , NFA(..)
   ) where
 
 import Regex
@@ -81,11 +86,11 @@ type NFATrans a s = [ NFATransItem a s ]
 
 data NFATransItem a s = NFATransItem { startState :: State s
                                      , transformItem :: Maybe a
-                                     , endState :: State s } deriving (Show)
+                                     , endState :: State s } deriving (Show, Eq, Ord)
 
 data State s = EndState s
              | StartState s
-             | MidState s deriving (Show)
+             | MidState s deriving (Show, Eq, Ord)
 
 instance (ToJSON s) => ToJSON (State s) where
   toJSON (EndState s) = 
