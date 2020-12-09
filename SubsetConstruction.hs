@@ -15,24 +15,28 @@ import Regex
 import Data.Aeson.Text
 
 subsetConstruction :: (Ord s, Ord a) => T.NFA a s -> Maybe (DFA a s)
-subsetConstruction = toDFA . subsetConstruction''
+subsetConstruction = snd . toDFA Nothing mempty . extentStates . subsetConstruction''
 
-toDFA :: (Ord s, Eq a) => T.NFATrans a (State s) -> Maybe (DFA a s)
-toDFA nfaTrans
-  | null startTrans = Nothing
-  | otherwise = return $ DFA (T.StartState . Set.map extractTState . extractTState . T.startState . head $ startTrans) (map (\(T.NFATransItem _ a s'') -> (fromJust a, toDFA' s'' newNfaTrans)) startTrans)
-  where startTrans = filter (isStartState . extractTState . T.startState) nfaTrans
-        newNfaTrans = nfaTrans \\ startTrans
+toDFA :: (Ord s) => Maybe (T.State (Set.Set s)) -> Set.Set (T.State (Set.Set s)) -> T.NFATrans a (Set.Set s) -> (Set.Set (T.State (Set.Set s)), Maybe (DFA a s))
+toDFA mState visitedStates nfaTrans
+  | null startTrans || state `Set.member` visitedStates = (visitedStates, Nothing)
+  | otherwise = (visitedStates', return $ DFA state transformes)
+  where startTrans = filter ((if mState == Nothing then isTStartState else (== fromJust mState)) . T.startState) nfaTrans
+        state = maybe (T.startState . head $ startTrans) id mState
+        (visitedStates', transformes) = foldr 
+            (\(T.NFATransItem s a s') (visitedStates, transformes) -> let (visitedStates', mdfa) = toDFA (return s') visitedStates nfaTrans 
+                                                                      in  (visitedStates', (fromJust a, maybe (DFA s' []) id mdfa):transformes))
+          (Set.insert state visitedStates, []) startTrans
 
-toDFA' :: (Ord s, Eq a) => T.State (State s) -> T.NFATrans a (State s) -> DFA a s
-toDFA' s nfaTrans
-  | isStartState s' = DFA (T.StartState s'') (map (\(T.NFATransItem _ a s'') -> (fromJust a, toDFA' s'' newNfaTrans)) trans)
-  | isEndState s' = DFA (T.EndState s'') (map (\(T.NFATransItem _ a s'') -> (fromJust a, toDFA' s'' newNfaTrans)) trans)
-  | otherwise = DFA (T.MidState s'') (map (\(T.NFATransItem _ a s'') -> (fromJust a, toDFA' s'' newNfaTrans)) trans)
-  where trans = filter ((== s) . T.startState) nfaTrans
-        s' = extractTState s
-        s'' = Set.map extractTState s'
-        newNfaTrans = nfaTrans \\ trans
+extentStates :: (Ord s) => T.NFATrans a (State s) -> T.NFATrans a (Set.Set s)
+extentStates [] = []
+extentStates (T.NFATransItem s transformItem s':xs) = T.NFATransItem ss transformItem ss': extentStates xs
+  where a = extractTState s
+        b = extractTState s'
+        a' = Set.map extractTState a
+        b' = Set.map extractTState b
+        ss = if isStartState a then T.StartState a' else if isEndState a then T.EndState a' else T.MidState a'
+        ss' = if isStartState b then T.StartState b'  else if isEndState b then T.EndState b' else T.MidState b'
 
 extractTState :: T.State s -> s
 extractTState (T.StartState s) = s
