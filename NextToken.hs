@@ -9,7 +9,7 @@
 
 -- then if you run
 -- nextToken "ifif" dfa
--- will get "ifi"
+-- will get "ifif"
 
 -- if you run
 -- nextToken "ifii" dfa
